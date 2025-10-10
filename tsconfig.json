@@ -1,0 +1,15 @@
+// tsconfig.json
+{
+  "compilerOptions": {
+    "lib": ["es2020"],                 // or "esnext", but see #2
+    "module": "none",
+    "target": "es5",
+    "noImplicitAny": true,
+    "sourceMap": false,
+    "rootDir": "src",
+    "outDir": "build",
+    "types": ["google-apps-script"],   // ← add this
+    "skipLibCheck": true               // ← avoids noise from libs
+  },
+  "include": ["src/**/*"]
+}

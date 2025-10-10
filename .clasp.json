@@ -1,0 +1,19 @@
+{
+  "projectId": "alpha-455522",
+  "projectNumber": "1031703590962",
+  "scriptId": "1u4unEwsEOIuqjg1bdMAaD7pLtXSKrv6m5xvxaGt0ttOyz775RCetw7Ar",
+  "rootDir": "build",
+  "parentId": "1WaRc9LvXkHRbz9L31UHtb9AcL9elxYkBbD2udLgF_Hk",
+  "scriptExtensions": [
+    ".js",
+    ".gs"
+  ],
+  "htmlExtensions": [
+    ".html"
+  ],
+  "jsonExtensions": [
+    ".json"
+  ],
+  "filePushOrder": [],
+  "skipSubdirectories": false
+}
