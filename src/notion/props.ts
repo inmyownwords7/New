@@ -1,15 +1,25 @@
+/**
+ * 07_props.ts — Notion property utilities (GAS)
+ * ------------------------------------------------
+ * - Title extraction, property ID/name mapping, diagnostics/logging
+ * - ScriptProperties-based caching for IDs and names
+ *
+ * Requires:
+ *   - utils/core.ts: decodeId
+ *   - notion/resources.ts: notionGetPage, notionGetDataSource
+ *
+ * Exposes (global):
+ *   titleOf, notionPropIdsToRows, getPropById,
+ *   logPropertyIds, logPropertyIdsFromPage, logPropertyIdsFromDataSource,
+ *   getPropertyNames, getPropertyNamesFromPage, getPropertyNamesFromDataSource,
+ *   getPropertyNameIdPairs, getPropertyNameIdPairsFromPage, getPropertyNameIdPairsFromDataSource,
+ *   getPropertyIds, getPropertyIdsFromPage, getPropertyIdsFromDataSource,
+ *   saveIdsToProps, loadIdsFromProps, savePropertyNames, loadPropertyNames,
+ *   cachePropertyNamesFromPage, cachePropertyNamesFromDataSource,
+ *   printEmailOrgId, printIdsForPage
+ */
 
-
-
-
-
-
-
-
-
-
-
-/** Utils */
+/** Return the Notion page title (first 'title' property plain text). */
 function titleOf(page: { properties?: any }): string {
   const props = page?.properties || {};
   for (const p of Object.values(props) as any[]) {
@@ -18,8 +28,7 @@ function titleOf(page: { properties?: any }): string {
   return "";
 }
 
-
-
+/** Build table rows of [name, rawId, prettyId, type] from a page/database/data_source object. */
 function notionPropIdsToRows(obj: { properties?: any }) {
   const props = obj?.properties || {};
   const rows: any[] = [];
@@ -32,18 +41,13 @@ function notionPropIdsToRows(obj: { properties?: any }) {
   return rows;
 }
 
-
-
-
-
-
-/** Get a property object from a page using its ID (fast via cached map). */
+/** Get a property object from a page using its ID via a precomputed id→name map. */
 function getPropById(page: any, propId: string, idNameMap: Map<string, string>) {
   const name = idNameMap.get(propId) || idNameMap.get(decodeId(propId));
   return name ? page?.properties?.[name] : null;
 }
 
-/** Log all property names → ids (works for Page or Database/Data Source JSON) */
+/** Log all property names → ids (works for Page or Database/Data Source JSON). */
 function logPropertyIds(obj: { properties?: any }): void {
   const props = obj?.properties || {};
   for (const [name, prop] of Object.entries(props) as [string, any][]) {
@@ -53,19 +57,23 @@ function logPropertyIds(obj: { properties?: any }): void {
   }
 }
 
-/** From a PAGE id/url */
+/** Log property IDs from a PAGE (by id/url). */
 function logPropertyIdsFromPage(pageIdOrUrl: string): void {
   const page = notionGetPage(pageIdOrUrl);
   logPropertyIds(page);
 }
 
-/** From a DATA SOURCE / DATABASE id/url */
+/** Log property IDs from a DATA SOURCE / DATABASE (by id/url). */
 function logPropertyIdsFromDataSource(dsIdOrUrl: string): void {
   const ds = notionGetDataSource(dsIdOrUrl);
   logPropertyIds(ds);
 }
 
-/** Return property names array (optionally sorted; title-first) */
+/**
+ * Return property names array (optionally sorted; title-first).
+ * @param obj Notion page/database-like object with properties
+ * @param opts sort: locale-aware sort; titleFirst: move title property to front
+ */
 function getPropertyNames(
   obj: { properties?: any },
   opts: { sort?: boolean; titleFirst?: boolean } = {}
@@ -91,19 +99,19 @@ function getPropertyNames(
   return names;
 }
 
-/** Get property names from PAGE */
+/** Convenience: property names from PAGE. */
 function getPropertyNamesFromPage(pageIdOrUrl: string, opts: { sort?: boolean; titleFirst?: boolean } = {}): string[] {
   const page = notionGetPage(pageIdOrUrl);
   return getPropertyNames(page, opts);
 }
 
-/** Get property names from DATA SOURCE / DB */
+/** Convenience: property names from DATA SOURCE / DB. */
 function getPropertyNamesFromDataSource(dsIdOrUrl: string, opts: { sort?: boolean; titleFirst?: boolean } = {}): string[] {
   const ds = notionGetDataSource(dsIdOrUrl);
   return getPropertyNames(ds, opts);
 }
 
-/** Return array of { name, idRaw, idPretty, type } */
+/** Return array of { name, idRaw, idPretty, type }. */
 function getPropertyNameIdPairs(
   obj: { properties?: any },
   opts: { titleFirst?: boolean; sort?: boolean } = {}
@@ -117,17 +125,19 @@ function getPropertyNameIdPairs(
   });
 }
 
-/** Convenience wrappers */
+/** Convenience: name/id pairs from PAGE. */
 function getPropertyNameIdPairsFromPage(pageIdOrUrl: string, opts: { titleFirst?: boolean; sort?: boolean } = {}) {
   const page = notionGetPage(pageIdOrUrl);
   return getPropertyNameIdPairs(page, opts);
 }
+
+/** Convenience: name/id pairs from DATA SOURCE / DB. */
 function getPropertyNameIdPairsFromDataSource(dsIdOrUrl: string, opts: { titleFirst?: boolean; sort?: boolean } = {}) {
   const ds = notionGetDataSource(dsIdOrUrl);
   return getPropertyNameIdPairs(ds, opts);
 }
 
-/** Get an array of property IDs (raw or pretty) */
+/** Get an array of property IDs (raw or pretty). */
 function getPropertyIds(obj: { properties?: any }, form: "raw" | "pretty" = "raw"): string[] {
   const props = obj?.properties || {};
   const ids: string[] = [];
@@ -137,16 +147,20 @@ function getPropertyIds(obj: { properties?: any }, form: "raw" | "pretty" = "raw
   }
   return ids;
 }
+
+/** Convenience: IDs from PAGE. */
 function getPropertyIdsFromPage(pageIdOrUrl: string, form: "raw" | "pretty" = "raw"): string[] {
   const page = notionGetPage(pageIdOrUrl);
   return getPropertyIds(page, form);
 }
+
+/** Convenience: IDs from DATA SOURCE / DB. */
 function getPropertyIdsFromDataSource(dsIdOrUrl: string, form: "raw" | "pretty" = "raw"): string[] {
   const ds = notionGetDataSource(dsIdOrUrl);
   return getPropertyIds(ds, form);
 }
 
-/** Save/load arrays into Script Properties (IDs or names) */
+/** Save/load arrays into Script Properties (IDs or names). */
 function saveIdsToProps(key: string, ids: string[]): void {
   PropertiesService.getScriptProperties().setProperty(key, JSON.stringify(ids));
 }
@@ -165,7 +179,7 @@ function loadPropertyNames(key: string): string[] {
   try { return JSON.parse(raw); } catch { return []; }
 }
 
-/** One-shot cache helpers */
+/** One-shot cache helpers (persist property names by source/page). */
 function cachePropertyNamesFromPage(pageIdOrUrl: string, storeKey: string): string[] {
   const arr = getPropertyNamesFromPage(pageIdOrUrl, { titleFirst: true });
   savePropertyNames(storeKey, arr);
@@ -177,7 +191,7 @@ function cachePropertyNamesFromDataSource(dsIdOrUrl: string, storeKey: string): 
   return arr;
 }
 
-/** Print specific property id examples */
+/** Example: print a specific property ID from a PAGE. */
 function printEmailOrgId(pageIdOrUrl: string): void {
   const page = notionGetPage(pageIdOrUrl);
   const raw = String(page.properties?.["Email (Org)"]?.id || "");
@@ -185,9 +199,8 @@ function printEmailOrgId(pageIdOrUrl: string): void {
   Logger.log(`Email (Org) id = ${pretty} (raw=${raw})`);
 }
 
-/** Simple page property id logger */
+/** Convenience: print all property IDs from a PAGE. */
 function printIdsForPage(pageIdOrUrl: string): void {
   const page = notionGetPage(pageIdOrUrl);
   logPropertyIds(page);
 }
-

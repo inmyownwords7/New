@@ -1,12 +1,39 @@
+/**
+ * 03_http.ts — Notion HTTP runtime (GAS)
+ * ------------------------------------------------
+ * Centralized Notion API calls using UrlFetchApp.
+ * - Handles authentication, Notion-Version, and query building.
+ * - Parses JSON automatically and throws on HTTP errors.
+ * - Includes exponential backoff for 429 (rate limit) and 5xx retries.
+ *
+ * Requires (loaded earlier):
+ *   - utils/core.ts: getHeaderCI, safeJson
+ *
+ * Exposes (global):
+ *   - toGasMethod
+ *   - notionApi
+ *   - notionFetchWithRetry
+ */
 
-/** Normalize to GAS's lowercase HttpMethod */
-function toGasMethod(m: AnyCaseHttpMethod = "GET"): GoogleAppsScript.URL_Fetch.HttpMethod {
-  return (String(m).toLowerCase() as GoogleAppsScript.URL_Fetch.HttpMethod);
+/**
+ * Normalize to GAS's lowercase HttpMethod.
+ * Converts "GET" → "get", etc.
+ */
+function toGasMethod(
+  m: AnyCaseHttpMethod = "GET"
+): GoogleAppsScript.URL_Fetch.HttpMethod {
+  return String(m).toLowerCase() as GoogleAppsScript.URL_Fetch.HttpMethod;
 }
 
+/**
+ * Core Notion API call wrapper for Google Apps Script.
+ * Handles headers, authentication, JSON parsing, and error reporting.
+ *
+ * @param {NotionApiParams} params - Parameters for the API call.
+ * @returns {NotionApiResult<T>} - Wrapped response with status, headers, and parsed data.
+ */
 function notionApi<T = unknown>(params: NotionApiParams): NotionApiResult<T> {
   const NOTION_BASE = "https://api.notion.com";
-
   const {
     method = "GET",
     path,
@@ -21,14 +48,18 @@ function notionApi<T = unknown>(params: NotionApiParams): NotionApiResult<T> {
   if (!path || !path.startsWith("/")) throw new Error('notionApi: "path" must start with "/"');
   if (!token) throw new Error("notionApi: missing NOTION_TOKEN");
 
-  // Build URL
+  // Build URL with query params
   let url = NOTION_BASE + path;
   if (query) {
     const qs: string[] = [];
     for (const [k, v] of Object.entries(query)) {
       if (v == null) continue;
-      if (Array.isArray(v)) for (const it of v) qs.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(it))}`);
-      else qs.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+      if (Array.isArray(v)) {
+        for (const it of v)
+          qs.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(it))}`);
+      } else {
+        qs.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+      }
     }
     if (qs.length) url += "?" + qs.join("&");
   }
@@ -67,8 +98,8 @@ function notionApi<T = unknown>(params: NotionApiParams): NotionApiResult<T> {
   if (debug) {
     const safe = { ...headers, Authorization: "Bearer ***redacted***" };
     Logger.log(
-      `notionApi → ${gasMethod.toUpperCase()} ${url}\nheaders=${JSON.stringify(safe)}\n` +
-      `contentType=${options.contentType || "(none)"}  hasPayload=${options.payload != null}`
+      `[notionApi] → ${gasMethod.toUpperCase()} ${url}\nheaders=${JSON.stringify(safe)}\n` +
+        `contentType=${options.contentType || "(none)"}  hasPayload=${options.payload != null}`
     );
   }
 
@@ -80,16 +111,34 @@ function notionApi<T = unknown>(params: NotionApiParams): NotionApiResult<T> {
 
   let data: unknown = text;
   if (ctype.includes("application/json")) {
-    try { data = JSON.parse(text); } catch {}
+    try {
+      data = JSON.parse(text);
+    } catch {}
   }
 
   if (throwOnHttpError && (status < 200 || status >= 300)) {
     throw new Error(`notionApi: HTTP ${status} → ${text}`);
   }
 
-  return { ok: status >= 200 && status < 300, status, data: data as T, headers: respHeaders, url, method: gasMethod };
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    data: data as T,
+    headers: respHeaders,
+    url,
+    method: gasMethod,
+  };
 }
 
+/**
+ * Retry wrapper for UrlFetchApp.fetch() with exponential backoff.
+ * Retries 429 (rate-limited) and 5xx server errors up to 5 times.
+ *
+ * @param {string} url - The target URL.
+ * @param {GoogleAppsScript.URL_Fetch.URLFetchRequestOptions} options - Fetch options.
+ * @returns {GoogleAppsScript.URL_Fetch.HTTPResponse} - The successful response.
+ * @throws {Error} After exhausting all retries.
+ */
 function notionFetchWithRetry(
   url: string,
   options: GoogleAppsScript.URL_Fetch.URLFetchRequestOptions
@@ -102,8 +151,6 @@ function notionFetchWithRetry(
     try {
       const resp = UrlFetchApp.fetch(url, options);
       const status = resp.getResponseCode();
-
-      // TS-safe: cast headers to an indexable dictionary
       const headers = resp.getHeaders() as unknown as Record<string, string>;
 
       if (status === 429 || status >= 500) {
@@ -113,6 +160,7 @@ function notionFetchWithRetry(
         delayMs *= 2;
         continue;
       }
+
       return resp;
     } catch (e) {
       lastErr = e;
@@ -120,5 +168,6 @@ function notionFetchWithRetry(
       delayMs *= 2;
     }
   }
+
   throw lastErr || new Error("notionFetchWithRetry: failed after retries");
 }

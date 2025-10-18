@@ -10,5 +10,5 @@
     "types": ["google-apps-script"],  
     "skipLibCheck": true              
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*.ts", "src/**/*.d.ts"]
 }

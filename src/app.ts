@@ -15,7 +15,7 @@ let aliasHeaders: Record<string, string> = {
   "Error Detection": "Error",
   "Notion Page URL": "NotionURL",
 };
-const META_KEY_COLMAP = "NOTION_SYNC_COLMAP"; // sheet-level metadata key for {col:prettyId} map
+
 /** Notion API smoke test */
 function notionApi_smoke(): NotionApiResult<any> {
   const r = notionApi({ method: "GET", path: "/v1/users/me", debug: true });
