@@ -1,4 +1,8 @@
 {
+  "scripts": {
+    "build": "npx tsc",
+    "push": "clasp push"
+  },
   "devDependencies": {
     "@types/google-apps-script": "^2.0.5",
     "typescript": "^5.9.3"

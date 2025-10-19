@@ -1,3 +1,5 @@
+/// <reference types="google-apps-script" />
+
 /**
  * 07_props.ts — Notion property utilities (GAS)
  * ------------------------------------------------
@@ -5,31 +7,40 @@
  * - ScriptProperties-based caching for IDs and names
  *
  * Requires:
- *   - utils/core.ts: decodeId
- *   - notion/resources.ts: notionGetPage, notionGetDataSource
+ *  - utils/core.ts: decodeId
+ *  - notion/resources.ts: notionGetPage, notionGetDataSource
  *
  * Exposes (global):
- *   titleOf, notionPropIdsToRows, getPropById,
- *   logPropertyIds, logPropertyIdsFromPage, logPropertyIdsFromDataSource,
- *   getPropertyNames, getPropertyNamesFromPage, getPropertyNamesFromDataSource,
- *   getPropertyNameIdPairs, getPropertyNameIdPairsFromPage, getPropertyNameIdPairsFromDataSource,
- *   getPropertyIds, getPropertyIdsFromPage, getPropertyIdsFromDataSource,
- *   saveIdsToProps, loadIdsFromProps, savePropertyNames, loadPropertyNames,
- *   cachePropertyNamesFromPage, cachePropertyNamesFromDataSource,
- *   printEmailOrgId, printIdsForPage
+ *  - titleOf
+ *  - notionPropIdsToRows
+ *  - getPropByIdFromMap
+ *  - logPropertyIds, logPropertyIdsFromPage, logPropertyIdsFromDataSource
+ *  - getPropertyNames, getPropertyNamesFromPage, getPropertyNamesFromDataSource
+ *  - getPropertyNameIdPairs, getPropertyNameIdPairsFromPage, getPropertyNameIdPairsFromDataSource
+ *  - getPropertyIds, getPropertyIdsFromPage, getPropertyIdsFromDataSource
+ *  - saveIdsToProps, loadIdsFromProps, savePropertyNames, loadPropertyNames
+ *  - cachePropertyNamesFromPage, cachePropertyNamesFromDataSource
+ *  - printEmailOrgId, printIdsForPage
+ *  - getCellValueByName, notionExtractCellValue
  */
+
+/* -------------------------------------------------------------------------- */
+/*                               Basic extractors                              */
+/* -------------------------------------------------------------------------- */
 
 /** Return the Notion page title (first 'title' property plain text). */
 function titleOf(page: { properties?: any }): string {
   const props = page?.properties || {};
   for (const p of Object.values(props) as any[]) {
-    if (p?.type === "title") return (p.title || []).map((t: any) => t.plain_text).join("");
+    if (p?.type === "title") return (p.title || []).map((t: any) => t.plain_text || "").join("");
   }
   return "";
 }
 
-/** Build table rows of [name, rawId, prettyId, type] from a page/database/data_source object. */
-function notionPropIdsToRows(obj: { properties?: any }) {
+/**
+ * Build table rows of [name, rawId, prettyId, type] from a page/database/data_source object.
+ */
+function notionPropIdsToRows(obj: { properties?: any }): any[] {
   const props = obj?.properties || {};
   const rows: any[] = [];
   for (const [name, prop] of Object.entries(props) as [string, any][]) {
@@ -41,11 +52,18 @@ function notionPropIdsToRows(obj: { properties?: any }) {
   return rows;
 }
 
-/** Get a property object from a page using its ID via a precomputed id→name map. */
-function getPropById(page: any, propId: string, idNameMap: Map<string, string>) {
+/**
+ * Get a property object from a page using its ID via a precomputed id→name map.
+ * (Renamed to avoid clashing with other modules' `getPropById`.)
+ */
+function getPropByIdFromMap(page: any, propId: string, idNameMap: Map<string, string>) {
   const name = idNameMap.get(propId) || idNameMap.get(decodeId(propId));
   return name ? page?.properties?.[name] : null;
 }
+
+/* -------------------------------------------------------------------------- */
+/*                                    Logs                                     */
+/* -------------------------------------------------------------------------- */
 
 /** Log all property names → ids (works for Page or Database/Data Source JSON). */
 function logPropertyIds(obj: { properties?: any }): void {
@@ -53,7 +71,7 @@ function logPropertyIds(obj: { properties?: any }): void {
   for (const [name, prop] of Object.entries(props) as [string, any][]) {
     const raw = String(prop?.id || "");
     const pretty = raw.includes("%") ? decodeId(raw) : raw;
-    Logger.log(`${name}  →  id=${pretty}  (raw=${raw})  type=${prop?.type || "?"}`);
+    Logger.log(`${name} → id=${pretty} (raw=${raw}) type=${prop?.type || "?"}`);
   }
 }
 
@@ -69,14 +87,18 @@ function logPropertyIdsFromDataSource(dsIdOrUrl: string): void {
   logPropertyIds(ds);
 }
 
+/* -------------------------------------------------------------------------- */
+/*                        Names / IDs (derived & cached)                       */
+/* -------------------------------------------------------------------------- */
+
 /**
  * Return property names array (optionally sorted; title-first).
- * @param obj Notion page/database-like object with properties
- * @param opts sort: locale-aware sort; titleFirst: move title property to front
+ * @param obj   Notion page/database-like object with properties
+ * @param opts  sort: locale-aware sort; titleFirst: move title property to front
  */
 function getPropertyNames(
-  obj: { properties?: any },
-  opts: { sort?: boolean; titleFirst?: boolean } = {}
+    obj: { properties?: any },
+    opts: { sort?: boolean; titleFirst?: boolean } = {}
 ): string[] {
   const { sort = false, titleFirst = true } = opts;
   const props = obj?.properties || {};
@@ -113,8 +135,8 @@ function getPropertyNamesFromDataSource(dsIdOrUrl: string, opts: { sort?: boolea
 
 /** Return array of { name, idRaw, idPretty, type }. */
 function getPropertyNameIdPairs(
-  obj: { properties?: any },
-  opts: { titleFirst?: boolean; sort?: boolean } = {}
+    obj: { properties?: any },
+    opts: { titleFirst?: boolean; sort?: boolean } = {}
 ): Array<{ name: string; idRaw: string; idPretty: string; type: string }> {
   const names = getPropertyNames(obj, opts);
   const props = obj?.properties || {};
@@ -160,6 +182,10 @@ function getPropertyIdsFromDataSource(dsIdOrUrl: string, form: "raw" | "pretty" 
   return getPropertyIds(ds, form);
 }
 
+/* -------------------------------------------------------------------------- */
+/*                           Properties storage cache                          */
+/* -------------------------------------------------------------------------- */
+
 /** Save/load arrays into Script Properties (IDs or names). */
 function saveIdsToProps(key: string, ids: string[]): void {
   PropertiesService.getScriptProperties().setProperty(key, JSON.stringify(ids));
@@ -191,6 +217,10 @@ function cachePropertyNamesFromDataSource(dsIdOrUrl: string, storeKey: string): 
   return arr;
 }
 
+/* -------------------------------------------------------------------------- */
+/*                                Diagnostics                                  */
+/* -------------------------------------------------------------------------- */
+
 /** Example: print a specific property ID from a PAGE. */
 function printEmailOrgId(pageIdOrUrl: string): void {
   const page = notionGetPage(pageIdOrUrl);
@@ -203,4 +233,107 @@ function printEmailOrgId(pageIdOrUrl: string): void {
 function printIdsForPage(pageIdOrUrl: string): void {
   const page = notionGetPage(pageIdOrUrl);
   logPropertyIds(page);
+}
+
+/* -------------------------------------------------------------------------- */
+/*                           Cell value convenience                            */
+/* -------------------------------------------------------------------------- */
+
+/** Return a plain string for a given property NAME on a page. */
+function getCellValueByName(page: any, propName: string): string {
+  const prop = page?.properties?.[propName];
+  return notionExtractCellValue(prop);
+}
+
+/**
+ * Convert a Notion property object into a plain string for Sheets/logging.
+ * (Renamed to avoid colliding with sheets/03_writes.ts's extractCellValue.)
+ * Handles common types; unknown types return "".
+ */
+function notionExtractCellValue(prop: any): string {
+  if (!prop) return "";
+
+  switch (prop.type) {
+    case "title":
+      return (prop.title || []).map((t: any) => t?.plain_text || "").join("");
+
+    case "rich_text":
+      return (prop.rich_text || []).map((t: any) => t?.plain_text || "").join("");
+
+    case "email":        return prop.email || "";
+    case "phone_number": return prop.phone_number || "";
+    case "url":          return prop.url || "";
+
+    case "date":
+      // prefer start; if you need ranges, include end as well.
+      return prop.date?.start || "";
+
+    case "status":       return prop.status?.name || "";
+    case "select":       return prop.select?.name || "";
+
+    case "multi_select":
+      return (prop.multi_select || []).map((o: any) => o?.name || "").join(", ");
+
+    case "people":
+      // Try display name; fall back to email if present
+      return (prop.people || [])
+          .map((p: any) => p?.name || p?.person?.email || "")
+          .filter(Boolean)
+          .join(", ");
+
+    case "number":
+      return (prop.number ?? "").toString();
+
+    case "checkbox":
+      return prop.checkbox ? "TRUE" : "FALSE";
+
+      // ---- Optional extras you may want ----
+    case "relation":
+      // Safe default: count of related records.
+      return String((prop.relation || []).length || 0);
+
+    case "files":
+      // Join file names (or URLs if you prefer)
+      return (prop.files || [])
+          .map((f: any) => f?.name || f?.file?.url || f?.external?.url || "")
+          .filter(Boolean)
+          .join(", ");
+
+    case "formula": {
+      const f = prop.formula || {};
+      switch (f.type) {
+        case "string":  return f.string || "";
+        case "number":  return (f.number ?? "").toString();
+        case "boolean": return f.boolean ? "TRUE" : "FALSE";
+        case "date":    return f.date?.start || "";
+        default:        return "";
+      }
+    }
+
+    case "rollup": {
+      const r = prop.rollup || {};
+      if (r.type === "number") return (r.number ?? "").toString();
+      if (r.type === "date")   return r.date?.start || "";
+      if (r.type === "array") {
+        const arr = r.array || [];
+        const values = arr.map((x: any) => {
+          if (x?.type) return notionExtractCellValue(x);
+          return typeof x === "string" ? x : "";
+        }).filter(Boolean);
+        return values.join(", ");
+      }
+      return "";
+    }
+
+    case "created_by":
+    case "last_edited_by":
+      return prop[prop.type]?.name || "";
+
+    case "created_time":
+    case "last_edited_time":
+      return prop[prop.type] || "";
+
+    default:
+      return "";
+  }
 }

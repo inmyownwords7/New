@@ -1,3 +1,5 @@
+/// <reference types="google-apps-script" />
+
 /**
  * 04_resources.ts — Notion resource fetchers (GAS)
  * ------------------------------------------------
@@ -5,16 +7,20 @@
  * - Get Page by ID
  * - Runtime type guards for response objects
  *
- * Requires:
- *   - utils/core.ts: extractId32, normalizeUuid, safeJson
- *   - notion/http.ts: notionApi
+ * Requires (loaded earlier as globals):
+ *  - utils/core.ts: extractId32, normalizeUuid, safeJson
+ *  - notion/http.ts: notionApi
  *
  * Exposes (global):
- *   - isDataSource
- *   - isDatabase
- *   - notionGetDataSource
- *   - notionGetPage
+ *  - isDataSource
+ *  - isDatabase
+ *  - notionGetDataSource
+ *  - notionGetPage
  */
+
+/* -------------------------------------------------------------------------- */
+/*                                Type guards                                  */
+/* -------------------------------------------------------------------------- */
 
 /** Type guard: Notion Data Source */
 function isDataSource(x: unknown): x is NotionDataSource {
@@ -26,9 +32,17 @@ function isDatabase(x: unknown): x is NotionDatabase {
   return !!x && typeof x === "object" && (x as any).object === "database";
 }
 
+/* -------------------------------------------------------------------------- */
+/*                                  Fetchers                                   */
+/* -------------------------------------------------------------------------- */
+
 /**
  * Fetch a Notion Data Source by ID; if not found, fall back to Database by the same ID.
  * Accepts raw IDs or URLs; normalizes to dashed UUID form.
+ *
+ * @param idOrUrl Raw 32-hex, dashed UUID, or Notion URL containing the id.
+ * @returns      The Data Source object if available, else the Database object.
+ * @throws       Error if neither endpoint returns a valid object.
  */
 function notionGetDataSource(idOrUrl: string): NotionDataSource | NotionDatabase {
   const id = normalizeUuid(extractId32(idOrUrl));
@@ -49,14 +63,18 @@ function notionGetDataSource(idOrUrl: string): NotionDataSource | NotionDatabase
   if (db.ok && isDatabase(db.data)) return db.data;
 
   throw new Error(
-    `/v1/data_sources/${id} → ${ds.status} ${safeJson(ds.data)}\n` +
-    `/v1/databases/${id} → ${db.status} ${safeJson(db.data)}`
+      `/v1/data_sources/${id} → ${ds.status} ${safeJson(ds.data)}\n` +
+      `/v1/databases/${id} → ${db.status} ${safeJson(db.data)}`
   );
 }
 
 /**
  * Fetch a Notion Page by ID or URL.
  * Normalizes input to dashed UUID before calling the API.
+ *
+ * @param idOrUrl Raw 32-hex, dashed UUID, or Notion URL containing the id.
+ * @returns      Notion Page object.
+ * @throws       Error on non-2xx or non-page response.
  */
 function notionGetPage(idOrUrl: string): NotionPage {
   const id = normalizeUuid(extractId32(idOrUrl));
@@ -65,7 +83,7 @@ function notionGetPage(idOrUrl: string): NotionPage {
   const r = notionApi<NotionPage | { object?: "error" }>({
     method: "GET",
     path: `/v1/pages/${id}`,
-    throwOnHttpError: false
+    throwOnHttpError: false,
   });
 
   if (r.ok && (r.data as NotionPage).object === "page") return r.data as NotionPage;

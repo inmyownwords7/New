@@ -1,6 +1,20 @@
 /// <reference types="google-apps-script" />
 
-let aliasHeaders: Record<string, string> = {
+/**
+ * app.ts — Entrypoint / UI layer for Notion → Sheets sync
+ * Requires globals from:
+ * - notion/orchestrator.ts
+ * - sheets/access.ts: resolveSpreadsheetId, getSheetByNameOrCreate, withSheetLock
+ * - sheets/headers.ts: ensureHeaders
+ * - sheets/writes.ts: clearDataBelowHeader, appendRowsBatched, upsertRowsByKey
+ */
+
+// ---- config you customize ----
+const DS_PEOPLE = "a92f493a-6843-4b0d-9812-117d699055db"; // Notion Data Source ID (replace)
+const TAB_PEOPLE = "People Sync";                           // Target sheet tab name
+
+// Aliases map: Notion property name → Sheet header label
+const aliasHeaders: Record<string, string> = {
   "Email (Org)": "Email",
   "Name (Org)": "Name",
   "Last edited time": "Edited",
@@ -16,32 +30,78 @@ let aliasHeaders: Record<string, string> = {
   "Notion Page URL": "NotionURL",
 };
 
-/** Notion API smoke test */
-function notionApi_smoke(): NotionApiResult<any> {
-  const r = notionApi({ method: "GET", path: "/v1/users/me", debug: true });
-  Logger.log(JSON.stringify({ ok: r.ok, status: r.status, object: (r.data as any)?.object, name: (r.data as any)?.name }, null, 2));
-  return r;
+function onOpen() {
+  SpreadsheetApp.getUi()
+      .createMenu("Notion Sync")
+      .addItem("Preview first 10", "app_previewFirst10")
+      .addItem("Fix headers (keep data)", "app_fixHeaders")
+      .addItem("Wipe & rebuild", "app_wipeAndRebuild")
+      .addItem("Append all rows", "app_syncAppendAll")
+      .addItem("Upsert by NotionURL", "app_syncUpsertByNotionURL")
+      .addToUi();
 }
 
-/** Sample query printer (first 10 rows) */
-function test_query_all_print(): void {
-  const dsId = "a92f493a-6843-4b0d-9812-117d699055db"; // <- replace with yours
-  const rows = queryDataSourceAll(
-    dsId,
-    { sorts: [{ timestamp: "last_edited_time", direction: "ascending" }] },
-    { pageSize: 50, debug: true }
-  );
-  Logger.log(`total=${rows.length}`);
-  rows.slice(0, 10).forEach((pg: any, i: number) => Logger.log(`${i + 1}. ${pg.id} — ${titleOf(pg)}`));
+/** Logs first 10 rows (no sheet writes) */
+function app_previewFirst10() {
+  const specs = buildSpecsFromAliases(DS_PEOPLE, aliasHeaders);
+  const headers = makeHeadersFromSpecs(specs);
+  const pages = fetchAllPages(DS_PEOPLE, { page_size: 50 });
+  const rows = pagesToRows(pages, specs).slice(0, 10);
+
+  Logger.log(`Headers: ${headers.join(" | ")}`);
+  rows.forEach((r, i) => Logger.log(`${i + 1}. ${r.join(" | ")}`));
 }
 
-// Your headers still start at B1:
-function demo_headers3() {
-  const DS_ID = "a92f493a-6843-4b0d-9812-117d699055db";
-  ensureAliasHeadersExact(DS_ID, "People Sync", aliasHeaders, /*startCol=*/1);
+/** Ensure header labels exist/are correct (keeps data) */
+function app_fixHeaders() {
+  const specs = buildSpecsFromAliases(DS_PEOPLE, aliasHeaders);
+  const headers = makeHeadersFromSpecs(specs);
+
+  const ss = SpreadsheetApp.getActive();
+  const sheet = getSheetByNameOrCreate(ss, TAB_PEOPLE);
+
+  withSheetLock(() => {
+    ensureHeaders(sheet, headers);
+  });
+
+  Logger.log(`Headers ensured on "${TAB_PEOPLE}" (${headers.length} cols).`);
 }
 
-function demo_headers() {
-  const DS_ID = "a92f493a-6843-4b0d-9812-117d699055db";
-  ensureAliasHeadersFromDataSourceWithMap(DS_ID, "People Sync", aliasHeaders);
+/** Upsert by a unique key (must be a label in headers, e.g. NotionURL) */
+function app_syncUpsertByNotionURL() {
+  const KEY = "NotionURL";
+
+  const specs = buildSpecsFromAliases(DS_PEOPLE, aliasHeaders);
+  const headers = makeHeadersFromSpecs(specs);
+  const pages = fetchAllPages(DS_PEOPLE);
+  const rows = pagesToRows(pages, specs);
+
+  const ss = SpreadsheetApp.getActive();
+  const sheet = getSheetByNameOrCreate(ss, TAB_PEOPLE);
+
+  withSheetLock(() => {
+    ensureHeaders(sheet, headers);
+    const res = upsertRowsByKey(sheet, KEY, headers, rows);
+    Logger.log(`Upsert complete → inserted=${res.inserted}, updated=${res.updated}`);
+  });
+}
+
+/** Full wipe + rebuild headers + append all */
+function app_wipeAndRebuild() {
+  const specs = buildSpecsFromAliases(DS_PEOPLE, aliasHeaders);
+  const headers = makeHeadersFromSpecs(specs);
+  const pages = fetchAllPages(DS_PEOPLE);
+  const rows = pagesToRows(pages, specs);
+
+  const ss = SpreadsheetApp.getActive();
+  const sheet = getSheetByNameOrCreate(ss, TAB_PEOPLE);
+
+  withSheetLock(() => {
+    // hard reset data below header then write
+    ensureHeaders(sheet, headers);
+    clearDataBelowHeader(sheet);
+    appendRowsBatched(sheet, rows, 500);
+  });
+
+  Logger.log(`Rebuilt + appended ${rows.length} rows on "${TAB_PEOPLE}".`);
 }

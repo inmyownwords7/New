@@ -1,45 +1,67 @@
+/// <reference types="google-apps-script" />
+
 /**
  * notion/orchestrator.ts
+ * ------------------------------------------------
  * High-level flows for pulling from Notion and shaping rows for Sheets.
  *
  * Requires (already loaded as globals):
- * - notion/schema.ts: buildSpecsFromDataSourceWithAliasesOnlyCI, buildSpecsFromDataSourceWithAliases
- * - notion/query.ts:  queryDataSourceAll
- * - notion/resources.ts: notionGetPage, notionGetDataSource
- * - sheets/writes.ts: extractCellValue
- * - sheets/headers.ts: ensureHeaders, ensureHeadersByPropId, ensureHeadersExactByPropId, setHeaderCellWithId, findColumnByPropId
- * - sheets/access.ts: getSheetByNameOrCreate, withSheetLock
- * - sheets/state.ts:  buildIdToNameMap, saveIdNameMap, loadIdNameMap, setSheetMeta, getSheetMeta, META_KEY_COLMAP
- * - utils/core.ts:    decodeId
+ * - notion/schema.ts:    buildSpecsFromDataSourceWithAliasesOnlyCI, buildSpecsFromDataSourceWithAliases
+ * - notion/query.ts:     queryDataSourceAll
+ * - notion/resources.ts: notionGetPage, notionGetDataSource (optional, not used directly here)
+ * - sheets/writes.ts:    appendRowsBatched, upsertRowsByKey   // ← actually used
+ * - sheets/headers.ts:   ensureHeaders
+ * - sheets/access.ts:    getSheetByNameOrCreate, withSheetLock
+ * - sheets/state.ts:     buildIdToNameMap, saveIdNameMap, loadIdNameMap, setSheetMeta, getSheetMeta, META_KEY_COLMAP
+ * - utils/core.ts:       decodeId, safeDecode (optional; this file uses decodeURIComponent safely)
  */
 
-// ---------- Public Orchestrator API ----------
+/* -------------------------------------------------------------------------- */
+/*                                Public API                                  */
+/* -------------------------------------------------------------------------- */
 
-/** Build specs from aliases, using your existing CI match helper */
+/**
+ * Build specs from aliases, using your existing CI match helper.
+ *
+ * @param dsIdOrUrl Notion data source ID or URL.
+ * @param aliases   Map of Notion property name → desired Sheet header label.
+ */
 function buildSpecsFromAliases(dsIdOrUrl: string, aliases: Record<string, string>): NotionSpec[] {
   return buildSpecsFromDataSourceWithAliasesOnlyCI(dsIdOrUrl, aliases);
 }
 
-/** Fetch all pages from a data source */
+/**
+ * Fetch all pages from a Notion data source.
+ *
+ * @param dsIdOrUrl Notion data source ID or URL.
+ * @param queryBody Optional Notion query body (filter/sort/page_size).
+ */
 function fetchAllPages(dsIdOrUrl: string, queryBody: Record<string, unknown> = {}): any[] {
   return queryDataSourceAll(dsIdOrUrl, queryBody);
 }
 
-/** Turn specs into column headers (labels) */
+/**
+ * Turn specs into column headers (labels), preferring the alias label when present.
+ */
 function makeHeadersFromSpecs(specs: NotionSpec[]): string[] {
   return specs.map(s => s.label || s.name);
 }
 
-/** Convert Notion pages → 2D rows aligned to given specs (one row per page) */
+/**
+ * Convert Notion pages → 2D rows aligned to given specs (one row per page).
+ * Uses a propId→name map when possible for fast lookup, falls back to name-based.
+ *
+ * @param pages Notion pages (objects with `.properties`).
+ * @param specs Column specifications produced by your schema builder.
+ */
 function pagesToRows(pages: any[], specs: NotionSpec[]): any[][] {
-  const idNameMap = buildIdNameMapFromPageOrDb(pages?.[0]); // best-effort for getPropById helper if you use it
+  const idNameMap = buildIdNameMapFromPageOrDb(pages?.[0]); // best-effort for getPropById
 
   return pages.map(page => {
     return specs.map(spec => {
-      // Prefer fast lookup via propId→name map when possible
       const propObj = idNameMap
-        ? getPropById(page, spec.propId, idNameMap)
-        : (page?.properties?.[spec.name] ?? null);
+          ? getPropById(page, spec.propId, idNameMap)
+          : (page?.properties?.[spec.name] ?? null);
       return stringifyNotionProp(propObj);
     });
   });
@@ -47,15 +69,17 @@ function pagesToRows(pages: any[], specs: NotionSpec[]): any[][] {
 
 /**
  * End-to-end: read Notion → ensure headers → append/upsert rows into a sheet.
- * opts.mode = "append" (default) or "upsert"
- * opts.keyLabel = header label used as unique key for upsert (required when mode="upsert")
- * opts.batchSize = write chunk size (default 500)
+ *
+ * @param dsIdOrUrl  Notion data source ID or URL.
+ * @param aliases    Map of Notion property name → Sheet header label.
+ * @param sheetName  Target sheet tab name.
+ * @param opts       { mode: "append" | "upsert"; keyLabel?: string; batchSize?: number }
  */
 function syncDataSourceToSheet(
-  dsIdOrUrl: string,
-  aliases: Record<string, string>,
-  sheetName: string,
-  opts: { mode?: "append" | "upsert"; keyLabel?: string; batchSize?: number } = {}
+    dsIdOrUrl: string,
+    aliases: Record<string, string>,
+    sheetName: string,
+    opts: { mode?: "append" | "upsert"; keyLabel?: string; batchSize?: number } = {}
 ) {
   const { mode = "append", keyLabel, batchSize = 500 } = opts;
 
@@ -74,7 +98,7 @@ function syncDataSourceToSheet(
   const sheet = getSheetByNameOrCreate(ss, sheetName);
 
   withSheetLock(() => {
-    const { changed } = ensureHeaders(sheet, headers);
+    ensureHeaders(sheet, headers);
 
     if (mode === "upsert") {
       if (!keyLabel) throw new Error('syncDataSourceToSheet: keyLabel is required when mode="upsert"');
@@ -89,9 +113,14 @@ function syncDataSourceToSheet(
   });
 }
 
-// ---------- Internals / helpers ----------
+/* -------------------------------------------------------------------------- */
+/*                           Internals / helpers                               */
+/* -------------------------------------------------------------------------- */
 
-/** Build a map of propId(raw/decoded) → name from a representative page or db */
+/**
+ * Build a map of propId (raw/decoded) → property name from a representative page/db.
+ * @param obj Notion page or database object with `.properties`.
+ */
 function buildIdNameMapFromPageOrDb(obj: any): Map<string, string> | null {
   const props = obj?.properties;
   if (!props || typeof props !== "object") return null;
@@ -106,7 +135,40 @@ function buildIdNameMapFromPageOrDb(obj: any): Map<string, string> | null {
   return m;
 }
 
-/** Convert a single Notion property object to a displayable/flat value */
+/**
+ * Resolve a property object from a page via propId (raw or decoded).
+ * Fast path uses the provided id→name map; slow path scans page.properties for a matching id.
+ *
+ * @param page      Notion page with `.properties`.
+ * @param propId    Raw/decoded property id to find.
+ * @param idToName  Map of id(raw/decoded) → property name.
+ */
+function getPropById(page: any, propId: string, idToName: Map<string, string>): any | null {
+  if (!page?.properties) return null;
+
+  // Try the map (raw or decoded)
+  const name = idToName.get(propId) || (() => { try { return idToName.get(decodeURIComponent(propId)); } catch { return undefined; } })();
+  if (name && page.properties[name]) return page.properties[name];
+
+  // Fallback: scan for an id match (raw/decoded)
+  const safeDecode = (s: string) => { try { return decodeURIComponent(s); } catch { return s; } };
+  const targetRaw = String(propId || "");
+  const targetDec = safeDecode(targetRaw);
+
+  for (const [_nm, prop] of Object.entries<any>(page.properties)) {
+    const id = String(prop?.id || "");
+    if (!id) continue;
+    if (id === targetRaw || id === targetDec || safeDecode(id) === targetDec) {
+      return prop;
+    }
+  }
+  return null;
+}
+
+/**
+ * Convert a single Notion property object to a displayable/flat value for Sheets.
+ * Handles common types plus rollups and formulas.
+ */
 function stringifyNotionProp(prop: any): any {
   if (!prop || typeof prop !== "object") return "";
 
@@ -139,9 +201,9 @@ function stringifyNotionProp(prop: any): any {
       return prop.date.start ?? "";
     case "files":
       return (prop.files || [])
-        .map((f: any) => f?.name || f?.file?.url || f?.external?.url)
-        .filter(Boolean)
-        .join(", ");
+          .map((f: any) => f?.name || f?.file?.url || f?.external?.url)
+          .filter(Boolean)
+          .join(", ");
     case "relation":
       return (prop.relation || []).map((r: any) => r?.id).join(", ");
     case "rollup":
@@ -153,6 +215,7 @@ function stringifyNotionProp(prop: any): any {
   }
 }
 
+/** Stringify a Notion rollup property into a flat cell value. */
 function stringifyRollup(prop: any): any {
   if (!prop || prop.type !== "rollup") return "";
   const r = prop.rollup;
@@ -167,23 +230,24 @@ function stringifyRollup(prop: any): any {
       return r.date.start ?? "";
     case "array":
       return (r.array || [])
-        .map((x: any) => {
-          if (!x) return "";
-          if (x.type === "title") return (x.title || []).map((t: any) => t.plain_text ?? "").join("");
-          if (x.type === "rich_text") return (x.rich_text || []).map((t: any) => t.plain_text ?? "").join("");
-          if (x.type === "people") return (x.people || []).map((p: any) => p?.name || p?.person?.email || p?.id).join(", ");
-          if (x.type === "select") return x.select?.name ?? "";
-          if (x.type === "multi_select") return (x.multi_select || []).map((o: any) => o.name).join(", ");
-          if (x.type === "status") return x.status?.name ?? "";
-          if (x.type === "number") return x.number ?? "";
-          try { return JSON.stringify(x); } catch { return String(x); }
-        })
-        .join("; ");
+          .map((x: any) => {
+            if (!x) return "";
+            if (x.type === "title") return (x.title || []).map((t: any) => t.plain_text ?? "").join("");
+            if (x.type === "rich_text") return (x.rich_text || []).map((t: any) => t.plain_text ?? "").join("");
+            if (x.type === "people") return (x.people || []).map((p: any) => p?.name || p?.person?.email || p?.id).join(", ");
+            if (x.type === "select") return x.select?.name ?? "";
+            if (x.type === "multi_select") return (x.multi_select || []).map((o: any) => o.name).join(", ");
+            if (x.type === "status") return x.status?.name ?? "";
+            if (x.type === "number") return x.number ?? "";
+            try { return JSON.stringify(x); } catch { return String(x); }
+          })
+          .join("; ");
     default:
       try { return JSON.stringify(r); } catch { return String(r); }
   }
 }
 
+/** Stringify a Notion formula property into a flat cell value. */
 function stringifyFormula(f: any): any {
   if (!f || typeof f !== "object") return "";
   switch (f.type) {
