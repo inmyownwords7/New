@@ -4,7 +4,10 @@
     "push": "clasp push"
   },
   "devDependencies": {
+    "@slack/types": "^2.17.0",
+    "@slack/web-api": "^7.11.0",
     "@types/google-apps-script": "^2.0.5",
+    "notion-types": "^7.7.1",
     "typescript": "^5.9.3"
   }
 }
