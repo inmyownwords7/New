@@ -18,6 +18,8 @@ function slackFindUserByEmail(email: string): { id: string; team_id?: string; em
     const e = String(email || "").trim();
     if (!e) throw new Error("slackFindUserByEmail: email is empty");
 
+    // If you wired permissions helpers, uncomment:
+    // try { slackEnsureDirectoryScopes(); } catch {}
 
     const r = slackApi<{
         ok: boolean;
